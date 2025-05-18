@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HỆ THỐNG PHÁT HIỆN CHÁY - BẢO VỆ DATACENTER</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+            color: #ffffff;
+            background-color: #007bff;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 0;
+        }
+        .status-box, .camera-box, .info-box, .debug-box {
+            background-color: #ffffff;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+        .status-box span {
+            font-weight: bold;
+        }
+        .status-box .normal {
+            color: green;
+        }
+        .camera-item {
+            margin-bottom: 20px;
+            position: relative;
+        }
+        .camera-box img {
+            width: 100%;
+            max-width: 640px;
+            height: auto;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            display: block;
+            margin-top: 5px;
+        }
+        .camera-status {
+            font-weight: bold;
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 3px;
+            margin-left: 5px;
+        }
+        .fire { 
+            color: white; 
+            background-color: red;
+        }
+        .normal-status {
+            color: white;
+            background-color: green;
+        }
+        .camera-title {
+            font-weight: bold;
+            margin-bottom: 5px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .confidence-meter {
+            width: 100%;
+            max-width: 640px;
+            height: 10px;
+            background-color: #e0e0e0;
+            border-radius: 5px;
+            margin-top: 5px;
+            overflow: hidden;
+        }
+        .confidence-value {
+            height: 100%;
+            background-color: #ff9800;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        .confidence-text {
+            font-size: 0.8em;
+            color: #555;
+            margin-top: 2px;
+        }
+        .debug-btn {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        .debug-content {
+            font-family: monospace;
+            white-space: pre-wrap;
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+            display: none;
+        }
+        .reload-btn {
+            background-color: #28a745;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            margin-top: 10px;
+            display: block;
+        }
+        .settings-box {
+            background-color: #ffffff;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            display: none;
+        }
+        .settings-btn {
+            background-color: #6c757d;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        .alarm-indicator {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            background-color: red;
+            color: white;
+            font-weight: bold;
+            padding: 5px 10px;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.5s;
+        }
+        .alarm-active {
+            animation: blink 1s infinite;
+        }
+        @keyframes blink {
+            0% { opacity: 1; }
+            50% { opacity: 0; }
+            100% { opacity: 1; }
+        }
+        .camera-container {
+            position: relative;
+            max-width: 640px;
+        }
+    </style>
+</head>
+<body>
+    <h1>HỆ THỐNG PHÁT HIỆN CHÁY - BẢO VỆ DATACENTER</h1>
+
+    <div class="status-box">
+        <div>Trạng thái hệ thống: <span id="globalStatus" class="normal">Bình thường</span></div>
+    </div>
+
+    <div class="status-box">
+        <div>Trạng thái các camera:</div>
+        <div id="cameraStatusContainer">
+            <!-- Trạng thái camera sẽ được thêm vào đây -->
+        </div>
+    </div>
+
+    <!-- Thêm trực tiếp các camera để tránh vấn đề với Jinja -->
+    <div class="camera-box">
+        <div class="camera-item">
+            <div class="camera-title">
+                <span>Raspberry Pi 1 (Webcam)</span>
+                <span id="camera0-status" class="camera-status normal-status">Bình thường</span>
+            </div>
+            <div class="camera-container">
+                <img src="/video_feed/0" alt="Camera 0">
+                <div id="camera0-alarm" class="alarm-indicator">!</div>
+            </div>
+            <div class="confidence-meter">
+                <div id="camera0-confidence" class="confidence-value"></div>
+            </div>
+            <div id="camera0-confidence-text" class="confidence-text">Mức độ tin cậy: 0%</div>
+        </div>
+        
+        <div class="camera-item">
+            <div class="camera-title">
+                <span>Raspberry Pi 2 (Sample Video 1)</span>
+                <span id="camera1-status" class="camera-status normal-status">Bình thường</span>
+            </div>
+            <div class="camera-container">
+                <img src="/video_feed/1" alt="Camera 1">
+                <div id="camera1-alarm" class="alarm-indicator">!</div>
+            </div>
+            <div class="confidence-meter">
+                <div id="camera1-confidence" class="confidence-value"></div>
+            </div>
+            <div id="camera1-confidence-text" class="confidence-text">Mức độ tin cậy: 0%</div>
+        </div>
+    </div>
+
+    <div class="info-box">
+        <div>Thông tin hệ thống</div>
+        <p>Đồ án: Tìm hiểu phát hiện cháy trên thiết bị mạng biên để bảo vệ datacenter (mức vật lý)</p>
+        <p>Model: YOLOv8 Nano - Được huấn luyện để phát hiện đám cháy</p>
+        <p>Các thiết bị đang giả lập: Raspberry Pi 1 (Webcam), Raspberry Pi 2 (Sample Video 1)</p>
+        
+        <button class="reload-btn" onclick="reloadPage()">Tải lại trang</button>
+        <button class="settings-btn" onclick="toggleSettings()">Cài đặt nâng cao</button>
+    </div>
+    
+    <div id="settings" class="settings-box">
+        <div>Cài đặt nâng cao</div>
+        <p>Thông số kỹ thuật:</p>
+        <ul>
+            <li>Ngưỡng tin cậy: 0.45 (45%)</li>
+            <li>Số frame liên tiếp để xác nhận: 3</li>
+            <li>Diện tích tối thiểu bounding box: 500px²</li>
+            <li>Cửa sổ thời gian theo dõi: 10 giây</li>
+        </ul>
+    </div>
+    
+    <div class="debug-box">
+        <div>Công cụ gỡ lỗi</div>
+        <button class="debug-btn" onclick="checkCameras()">Kiểm tra camera</button>
+        <div id="debugResult" class="debug-content"></div>
+    </div>
+
+    <script>
+        // Hiển thị/ẩn cài đặt nâng cao
+        function toggleSettings() {
+            const settingsEl = document.getElementById('settings');
+            settingsEl.style.display = settingsEl.style.display === 'none' || settingsEl.style.display === '' ? 'block' : 'none';
+        }
+        
+        // Cập nhật trạng thái từ server
+        function updateStatus() {
+            fetch('/status')
+                .then(response => response.json())
+                .then(data => {
+                    // Cập nhật trạng thái tổng thể
+                    const globalStatus = document.getElementById('globalStatus');
+                    globalStatus.textContent = data.any_fire_detected ? 'CẢNH BÁO CHÁY!' : 'Bình thường';
+                    globalStatus.className = data.any_fire_detected ? 'fire' : 'normal';
+                    
+                    // Cập nhật trạng thái từng camera
+                    const cameraStatusHTML = data.cameras.map(cam => 
+                        `<div>${cam.name} <span class="camera-status ${cam.fire_detected ? 'fire' : 'normal-status'}">${cam.fire_detected ? 'CẢNH BÁO CHÁY!' : 'Bình thường'}</span></div>`
+                    ).join('');
+                    
+                    document.getElementById('cameraStatusContainer').innerHTML = cameraStatusHTML;
+                    
+                    // Cập nhật chi tiết cho từng camera
+                    data.cameras.forEach(cam => {
+                        const statusEl = document.getElementById(`camera${cam.id}-status`);
+                        const confidenceBarEl = document.getElementById(`camera${cam.id}-confidence`);
+                        const confidenceTextEl = document.getElementById(`camera${cam.id}-confidence-text`);
+                        const alarmEl = document.getElementById(`camera${cam.id}-alarm`);
+                        
+                        // Cập nhật trạng thái
+                        statusEl.textContent = cam.fire_detected ? 'CẢNH BÁO CHÁY!' : 'Bình thường';
+                        statusEl.className = cam.fire_detected ? 'camera-status fire' : 'camera-status normal-status';
+                        
+                        // Cập nhật mức độ tin cậy
+                        const confidencePercent = Math.round(cam.confidence * 100);
+                        confidenceBarEl.style.width = `${confidencePercent}%`;
+                        confidenceBarEl.style.backgroundColor = cam.fire_detected ? '#ff0000' : 
+                                                             (confidencePercent > 30 ? '#ff9800' : '#4caf50');
+                        confidenceTextEl.textContent = `Mức độ tin cậy: ${confidencePercent}%`;
+                        
+                        // Hiệu ứng cảnh báo
+                        if (cam.fire_detected) {
+                            alarmEl.style.opacity = '1';
+                            alarmEl.classList.add('alarm-active');
+                        } else {
+                            alarmEl.style.opacity = '0';
+                            alarmEl.classList.remove('alarm-active');
+                        }
+                    });
+                })
+                .catch(error => {
+                    console.error('Error fetching status:', error);
+                });
+        }
+        
+        // Kiểm tra tình trạng camera
+        function checkCameras() {
+            fetch('/check_cameras')
+                .then(response => response.json())
+                .then(data => {
+                    const debugEl = document.getElementById('debugResult');
+                    debugEl.style.display = 'block';
+                    
+                    const info = data.map(cam => {
+                        const detectionHistory = cam.detection_history && cam.detection_history.length > 0 ? 
+                            `Lịch sử phát hiện: ${cam.detection_history.map(d => d ? '✓' : '✗').join(' ')}` : 
+                            'Chưa có lịch sử phát hiện';
+                        
+                        return `Camera ${cam.id}: ${cam.name}
+ - Có khung hình: ${cam.has_frame ? 'Có' : 'Không'}
+ - Stream đã mở: ${cam.stream_opened ? 'Có' : 'Không'}
+ - ${detectionHistory}
+ - Mức độ tin cậy: ${Math.round(cam.confidence * 100)}%`;
+                    }).join('\n\n');
+                    
+                    debugEl.textContent = info;
+                })
+                .catch(error => {
+                    console.error('Error checking cameras:', error);
+                    document.getElementById('debugResult').textContent = 'Lỗi khi kiểm tra camera: ' + error;
+                });
+        }
+        
+        // Tải lại trang
+        function reloadPage() {
+            window.location.reload();
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            updateStatus(); // Cập nhật lần đầu
+            setInterval(updateStatus, 1000); // Cập nhật mỗi giây
+        });
+    </script>
+</body>
+</html>
