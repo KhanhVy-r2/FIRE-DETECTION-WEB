@@ -6,11 +6,15 @@ import threading
 import numpy as np
 from ultralytics import YOLO
 from collections import deque
+import logging
+from logging.handlers import RotatingFileHandler
+from datetime import datetime
 
 app = Flask(__name__)
 
 MODEL_PATH = 'models/best.pt'
 SAMPLE_VIDEOS_DIR = 'videotest'
+LOG_DIR = 'logs'
 
 # Các tham số quan trọng để tinh chỉnh phát hiện lửa
 CONFIDENCE_THRESHOLD = 0.45  # Giảm ngưỡng để phát hiện chính xác hơn
@@ -39,6 +43,20 @@ last_detection_time = {}
 detection_history = {}  # Lưu lịch sử phát hiện của mỗi camera
 fire_confidence = {}    # Lưu mức độ tin cậy mới nhất của phát hiện
 
+# Cấu hình logging
+os.makedirs(LOG_DIR, exist_ok=True)
+performance_logger = logging.getLogger('PerformanceLogger')
+performance_logger.setLevel(logging.INFO)
+perf_handler = RotatingFileHandler(os.path.join(LOG_DIR, 'performance_log.txt'), maxBytes=10*1024*1024, backupCount=5)
+perf_handler.setFormatter(logging.Formatter('%(asctime)s | %(message)s'))
+performance_logger.addHandler(perf_handler)
+
+detection_logger = logging.getLogger('DetectionLogger')
+detection_logger.setLevel(logging.INFO)
+detect_handler = RotatingFileHandler(os.path.join(LOG_DIR, 'fire_detection_log.txt'), maxBytes=10*1024*1024, backupCount=5)
+detect_handler.setFormatter(logging.Formatter('%(asctime)s | %(message)s'))
+detection_logger.addHandler(detect_handler)
+
 def create_blank_frame(text):
     frame = np.zeros((480, 640, 3), np.uint8)
     cv2.putText(frame, text, (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
@@ -55,16 +73,19 @@ def init_cameras():
                     if not stream.isOpened():
                         frames[camera["id"]] = create_blank_frame(f"Cannot open webcam for {camera['name']}")
                         fire_detected[camera["id"]] = False
+                        performance_logger.info(f"Camera {camera['id']} ({camera['name']}) | Failed to open webcam")
                         continue
             else:
                 if not os.path.exists(camera["source"]):
                     frames[camera["id"]] = create_blank_frame(f"Video {camera['source']} not found")
                     fire_detected[camera["id"]] = False
+                    performance_logger.info(f"Camera {camera['id']} ({camera['name']}) | Video not found")
                     continue
                 stream = cv2.VideoCapture(camera["source"])
                 if not stream.isOpened():
                     frames[camera["id"]] = create_blank_frame(f"Cannot open video for {camera['name']}")
                     fire_detected[camera["id"]] = False
+                    performance_logger.info(f"Camera {camera['id']} ({camera['name']}) | Failed to open video")
                     continue
 
             camera_streams[camera["id"]] = stream
@@ -78,11 +99,13 @@ def init_cameras():
             thread.daemon = True
             thread.start()
             print(f"Initialized camera: {camera['name']}")
+            performance_logger.info(f"Camera {camera['id']} ({camera['name']}) | Initialized successfully")
 
         except Exception as e:
             print(f"Error initializing camera {camera['name']}: {e}")
             frames[camera["id"]] = create_blank_frame(f"Error: {str(e)}")
             fire_detected[camera["id"]] = False
+            performance_logger.info(f"Camera {camera['id']} ({camera['name']}) | Error initializing: {str(e)}")
 
 def process_camera_frames(camera_id):
     global frames, fire_detected, last_detection_time, fire_confidence
@@ -92,6 +115,7 @@ def process_camera_frames(camera_id):
 
     if not stream or not stream.isOpened():
         frames[camera_id] = create_blank_frame(f"Cannot open {camera_info['name']}")
+        performance_logger.info(f"Camera {camera_id} ({camera_info['name']}) | Stream not opened")
         return
 
     # Khởi tạo lịch sử phát hiện
@@ -100,21 +124,30 @@ def process_camera_frames(camera_id):
     # Tạo danh sách theo dõi phát hiện theo thời gian (cho cửa sổ trượt)
     detection_timestamps = deque(maxlen=int(30 * TIME_WINDOW))  # Giả sử 30fps
     
+    # Đo FPS và độ trễ
+    frame_count = 0
+    start_time = time.time()
+    fps_log_interval = 10  # Ghi log FPS mỗi 10 giây
+    last_log_time = start_time
+
     while True:
+        loop_start_time = time.time()
+
         success, frame = stream.read()
 
         if not success:
             if camera_info["type"] == "video":
                 stream.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                performance_logger.info(f"Camera {camera_id} ({camera_info['name']}) | Video looped")
                 continue
             else:
                 frames[camera_id] = create_blank_frame(f"Lost connection to {camera_info['name']}")
+                performance_logger.info(f"Camera {camera_id} ({camera_info['name']}) | Lost connection")
                 time.sleep(1)
                 continue
 
         annotated_frame = frame.copy()
         
-        # Thêm thông tin về camera vào góc trên bên trái với màu dễ nhìn
         cv2.putText(annotated_frame, camera_info["name"], (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
@@ -193,6 +226,7 @@ def process_camera_frames(camera_id):
                 
             except Exception as e:
                 print(f"Error processing frame from {camera_info['name']}: {e}")
+                performance_logger.info(f"Camera {camera_id} ({camera_info['name']}) | Error processing frame: {str(e)}")
 
         # Hiển thị cảnh báo nếu phát hiện lửa
         if fire_detected.get(camera_id, False):
@@ -205,8 +239,25 @@ def process_camera_frames(camera_id):
             confidence_info = f"Confidence: {fire_confidence.get(camera_id, 0):.2f}"
             cv2.putText(annotated_frame, confidence_info, (50, 120),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+            # Ghi log cảnh báo
+            detection_logger.info(f"Camera {camera_id} ({camera_info['name']}) | FIRE DETECTED | Confidence: {fire_confidence.get(camera_id, 0):.2f}")
 
         frames[camera_id] = annotated_frame
+
+        # Tính và ghi log FPS
+        frame_count += 1
+        elapsed_time = current_time - start_time
+        if current_time - last_log_time >= fps_log_interval:
+            fps = frame_count / elapsed_time if elapsed_time > 0 else 0
+            performance_logger.info(f"Camera {camera_id} ({camera_info['name']}) | FPS: {fps:.2f}")
+            frame_count = 0
+            start_time = current_time
+            last_log_time = current_time
+
+        # Tính và ghi log độ trễ
+        loop_time = (time.time() - loop_start_time) * 1000  # Chuyển sang ms
+        performance_logger.info(f"Camera {camera_id} ({camera_info['name']}) | Loop Latency: {loop_time:.2f}ms")
+
         time.sleep(0.03)  # Giảm tải CPU
 
 def generate_frames(camera_id):
@@ -223,6 +274,7 @@ def generate_frames(camera_id):
                    b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
         except Exception as e:
             print(f"Error generating frame for camera {camera_id}: {e}")
+            performance_logger.info(f"Camera {camera_id} | Error generating frame: {str(e)}")
             time.sleep(0.1)
 
 @app.route('/')
